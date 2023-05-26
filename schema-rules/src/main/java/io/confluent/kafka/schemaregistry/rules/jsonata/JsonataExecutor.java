@@ -22,11 +22,17 @@ import com.api.jsonata4java.expressions.Expressions;
 import com.api.jsonata4java.expressions.ParseException;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
+import com.google.common.cache.Cache;
+import com.google.common.cache.CacheBuilder;
 import io.confluent.kafka.schemaregistry.rules.RuleContext;
 import io.confluent.kafka.schemaregistry.rules.RuleException;
 import io.confluent.kafka.schemaregistry.rules.RuleExecutor;
 import java.io.IOException;
 import java.util.Map;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.atomic.AtomicBoolean;
+
 import org.apache.kafka.common.config.ConfigException;
 
 public class JsonataExecutor implements RuleExecutor {
@@ -38,6 +44,11 @@ public class JsonataExecutor implements RuleExecutor {
 
   private long timeoutMs = 60000;
   private int maxDepth = 1000;
+
+  private static final Cache<String,Expressions> expressionsCache =
+          CacheBuilder.newBuilder()
+                  .maximumSize(100)
+                  .build();
 
   @Override
   public void configure(Map<String, ?> configs) {
@@ -64,13 +75,35 @@ public class JsonataExecutor implements RuleExecutor {
     return TYPE;
   }
 
+  public static final AtomicBoolean useCache = new AtomicBoolean(false);
+
+  private static Expressions loadExpressions(final String stringExpr) throws ParseException, IOException {
+    if(!useCache.get())
+      return Expressions.parse(stringExpr);
+    try {
+      return expressionsCache.get(
+              stringExpr,
+              () -> Expressions.parse(stringExpr)
+      );
+    } catch (ExecutionException e) {
+      Throwable cause = e.getCause();
+      if (cause instanceof ParseException) throw (ParseException) cause;
+      if (cause instanceof IOException) throw (IOException) cause;
+      throw cause instanceof RuntimeException ?
+              (RuntimeException) cause : new RuntimeException(cause);
+    }
+  }
+
+
+
   @Override
   public Object transform(RuleContext ctx, Object message)
       throws RuleException {
     JsonNode jsonObj = (JsonNode) message;
     Expressions expr;
     try {
-      expr = Expressions.parse(ctx.rule().getExpr());
+//      expr = Expressions.parse(ctx.rule().getExpr());
+      expr = loadExpressions(ctx.rule().getExpr());
     } catch (ParseException e) {
       throw new RuleException("Could not parse expression", e);
     } catch (EvaluateRuntimeException ere) {

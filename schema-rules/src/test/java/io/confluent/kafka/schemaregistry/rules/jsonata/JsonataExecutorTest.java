@@ -20,6 +20,7 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.google.common.base.Stopwatch;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSortedMap;
 import com.google.protobuf.Descriptors.Descriptor;
@@ -93,9 +94,12 @@ public class JsonataExecutorTest {
     defaultConfig.put(KafkaAvroSerializerConfig.USE_LATEST_WITH_METADATA,
         "application.version=v1");
     defaultConfig.put(KafkaAvroSerializerConfig.LATEST_COMPATIBILITY_STRICT, "false");
+    /*
+     */
     defaultConfig.put(KafkaAvroSerializerConfig.RULE_EXECUTORS, "jsonata");
     defaultConfig.put(KafkaAvroSerializerConfig.RULE_EXECUTORS + ".jsonata.class",
         JsonataExecutor.class.getName());
+
     avroSerializer = new KafkaAvroSerializer(schemaRegistry, defaultConfig);
     Map<String, Object> defaultConfig2 = new HashMap<>(defaultConfig);
     defaultConfig2.put(KafkaAvroSerializerConfig.USE_LATEST_WITH_METADATA,
@@ -150,12 +154,17 @@ public class JsonataExecutorTest {
     byte[] bytes;
     Object obj;
 
+    JsonataExecutor.useCache.set(true);
+    KafkaAvroDeserializer.compareJson.set(true);
+
     String ruleString =
         "$merge([$sift($, function($v, $k) {$k != 'size'}), {'height': $.'size'}])";
 
-    OldWidget widget = new OldWidget("alice");
-    widget.setSize(123);
-    Schema schema = ReflectData.get().getSchema(OldWidget.class);
+//    OldWidget widget = new OldWidget("alice");
+    NewWidget widget = new NewWidget("alice");
+    widget.setHeight(123);
+//    Schema schema = ReflectData.get().getSchema(OldWidget.class);
+    Schema schema = ReflectData.get().getSchema(NewWidget.class);
     AvroSchema avroSchema = new AvroSchema(schema);
     SortedMap<String, String> props = ImmutableSortedMap.of("application.version", "v1");
     Metadata metadata = new Metadata(Collections.emptySortedMap(), props, Collections.emptySortedSet());
@@ -167,6 +176,7 @@ public class JsonataExecutorTest {
     Rule rule = new Rule("myRule", null, RuleKind.TRANSFORM, RuleMode.UPGRADE,
         JsonataExecutor.TYPE, null, null, ruleString, null, null, false);
     RuleSet ruleSet = new RuleSet(Collections.singletonList(rule), Collections.emptyList());
+//    RuleSet ruleSet = new RuleSet(Collections.emptyList(), Collections.emptyList());
     props = ImmutableSortedMap.of("application.version", "v2");
     metadata = new Metadata(Collections.emptySortedMap(), props, Collections.emptySortedSet());
     avroSchema = avroSchema.copy(metadata, ruleSet);
@@ -174,7 +184,14 @@ public class JsonataExecutorTest {
 
     bytes = reflectionAvroSerializer.serialize(topic, widget);
 
+    Stopwatch watch = Stopwatch.createStarted();
     obj = avroDeserializer.deserialize(topic, bytes);
+
+    for (int i = 0; i < 10000; i++) {
+      obj = avroDeserializer.deserialize(topic, bytes);
+    }
+    watch.stop();
+    System.out.println("watch = " + watch);
     assertTrue(
         "Returned object should be a NewWidget",
         GenericRecord.class.isInstance(obj)

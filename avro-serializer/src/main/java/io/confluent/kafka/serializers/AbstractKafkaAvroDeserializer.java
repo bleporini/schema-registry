@@ -45,6 +45,7 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import io.confluent.kafka.schemaregistry.avro.AvroSchema;
 import io.confluent.kafka.schemaregistry.avro.AvroSchemaProvider;
@@ -369,6 +370,8 @@ public abstract class AbstractKafkaAvroDeserializer extends AbstractKafkaSchemaS
     return reflectData.getSchema(readerClass);
   }
 
+  public static final AtomicBoolean compareJson = new AtomicBoolean(false);
+
   class DeserializationContext {
     private final String topic;
     private final Boolean isKey;
@@ -509,8 +512,11 @@ public abstract class AbstractKafkaAvroDeserializer extends AbstractKafkaSchemaS
           }
         }
 
+        Object initialOne = result;
+        JsonNode initial=null;
         // First apply migration rules
         if (!migrations.isEmpty()) {
+          if(compareJson.get()) initial = migrations.get(0).getSource().toJson(result);
           result = executeMigrations(migrations, getSubject(), topic, headers, result);
         }
 
@@ -518,9 +524,13 @@ public abstract class AbstractKafkaAvroDeserializer extends AbstractKafkaSchemaS
           readerAvroSchema = writerAvroSchema;
         }
         if (result instanceof JsonNode) {
-          reader = getDatumReader(readerAvroSchema.rawSchema(), readerAvroSchema.rawSchema());
-          result = AvroSchemaUtils.toObject(
-              (JsonNode) result, readerAvroSchema, (DatumReader<Object>) reader);
+          if(compareJson.get() && initial.equals(result) && result.equals(initial))
+            result = initialOne;
+          else {
+            reader = getDatumReader(readerAvroSchema.rawSchema(), readerAvroSchema.rawSchema());
+            result = AvroSchemaUtils.toObject(
+                (JsonNode) result, readerAvroSchema, (DatumReader<Object>) reader);
+          }
         }
 
         // Next apply domain rules
